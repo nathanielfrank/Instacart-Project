@@ -1,0 +1,288 @@
+---
+title: "Project Functions"
+output: html_notebook
+---
+
+
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(Matrix)
+
+# product data from Instacart
+products <- read.csv("products.csv")
+
+# the list of product ids for each order
+order_lists <- readRDS(file = "order_lists.rds")
+for(i in 1:length(order_lists)){
+  order_lists[[i]] <- sort(unique(order_lists[[i]]))
+}
+
+# the list of department names and IDs
+depts <- read.csv("departments.csv")
+
+# copurchase matrix
+copurchases <- readRDS(file = "copurchases.rds")
+
+# the total number of times each product is ordered
+product_counts <- readRDS(file = "product_counts.rds")
+
+# the same as above, but removing any products that were never ordered
+product_counts_nonzero <- readRDS(file = "product_counts_nonzero.rds")
+
+# the same as above, but with product name info
+# you should view this one to get an idea for which products to try out
+purchased <- left_join(product_counts_nonzero, products, by = "product_id") %>%
+  select(-aisle_id, -department_id)
+
+# the number of products in each department
+dept_counts <- left_join(summarise(group_by(products, department_id), n()), depts, by = "department_id")
+
+# pre-run category results
+pasta <- readRDS(file = "dry_goods_pasta_results.rds")
+produce <- readRDS(file = "produce_results.rds")
+snacks <- readRDS(file = "snacks_results.rds")
+
+```
+
+
+```{r}
+
+### NOTE: takes about 1 minute to run
+### USAGE: suggestions(prod_id, multiple_copurchases, view_num)
+
+### PARAMETERS
+  # prod_id: the product ID to gather other product suggestions for
+  # multiple_copurchases: whether to filter out products that were only copurchased once (TRUE or FALSE)
+  # view_num: the maximum number of results to display
+
+suggestions <- function(prod_id, multiple_copurchases = FALSE, view_num = 10){
+  
+  PRODUCT_ID <- prod_id
+  MORE_THAN_ONE_COPURCHASE <- multiple_copurchases
+  VIEW <- view_num
+  
+  
+  # Prints product name
+  cat(paste("Product:", products$product_name[PRODUCT_ID], "\n"))
+  
+  # Stops the program if the given product was never purchased
+  if(product_counts$count[PRODUCT_ID] == 0){
+    write("ERROR: Product was never purchased. Please choose a different product ID.", stderr())
+  }else{
+    
+    # identifies the index of the product in the condensed purchase count table
+    index <- match(PRODUCT_ID, product_counts_nonzero$product_id)
+    
+    # the total number of times the product was purchased
+    prod_count <- product_counts_nonzero$count[index]
+    
+    # the total number of orders
+    num_orders <- length(order_lists)
+    
+    scope <- prod_count / num_orders
+    
+    # creates a new dataframe to store the results
+    matches <- data.frame()
+    
+    # prints the number of times the product was purchased
+    cat(paste("Number of Times Purchased:", prod_count, "\n\n"))
+    
+    #starts the timer
+    start <- now()
+    
+    
+    # PART ONE: compare to products with lower product IDs
+    # skips this portion if index = 1 
+    if(index > 1){
+      
+      # for each product with a lower product ID...
+      for(i in 1:(index-1)){
+        
+        # assign 'row' as the other product's ID number
+        row <- product_counts_nonzero$product_id[i]
+        
+        # retrieve the number of copurchases between the two products
+        copurchase <- copurchases[row, PRODUCT_ID]
+        
+        # if they have never been bought together, move on to the next product
+        # otherwise...
+        if(copurchase != 0){
+          
+            amazon <- copurchase / (sqrt(product_counts_nonzero$count[i] * prod_count))
+            confidence <- copurchase / prod_count
+            lift <- (num_orders * copurchase) / (prod_count * product_counts_nonzero$count[i])
+            
+            # add this product and its info as a new row in 'matches'
+            matches <- rbind(matches, c(row, amazon, confidence, lift, product_counts_nonzero$count[i], copurchase))
+          }
+      }
+    }
+    
+    # PART TWO: compare to products with higher product IDs
+    # skip this portion if this product is the last index
+    if(index < nrow(product_counts_nonzero)){  
+      
+      # for each product with a higher product ID... 
+      for(i in (index+1):nrow(product_counts_nonzero)){
+        
+        # assign 'col' as the other product's ID number
+        col <- product_counts_nonzero$product_id[i]
+        
+        # retrieve the number of copurchases between the two products
+        copurchase <- copurchases[PRODUCT_ID, col]
+        
+        # if they have never been bought together, move on to the next product
+        # otherwise...
+        if(copurchase != 0){
+          
+            amazon <- copurchase / (sqrt(product_counts_nonzero$count[i] * prod_count))
+            confidence <- copurchase / prod_count
+            lift <- (num_orders * copurchase) / (prod_count * product_counts_nonzero$count[i])
+            
+            # add this product and its info as a new row in 'matches'
+            matches <- rbind(matches, c(col, amazon, confidence, lift, product_counts_nonzero$count[i], copurchase))
+        }
+      }
+    }
+    
+    # print the elapsed time
+    cat(paste("Runtime:", now() - start, "\n"))
+    
+    # rename the columns of 'matches'
+    colnames(matches) <- c("product", "amazon", "confidence", "lift", "prod2_cnt", "copurchase")
+    
+    # print the number of matches found
+    cat(paste("Number of matches:", nrow(matches), "\n"))
+    cat("Data recorded in data frame 'matches'\n")
+    
+    matches$amzn_rank <- rank(1 - matches$amazon, ties.method= "min")
+    matches$conf_rank <- rank(1 - matches$confidence, ties.method= "min")
+    matches$lift_rank <- rank(1 - matches$lift, ties.method= "min")
+    
+    # organize the results
+    top_matches <- matches %>% 
+      left_join(products, by = c("product" = "product_id")) %>%             # add in product name info
+      
+      # remove unwanted columns & re-sort
+      select(product, product_name, amazon, confidence, lift, amzn_rank, conf_rank, lift_rank, copurchase) %>%   
+      arrange(desc(amazon), desc(confidence), desc(lift))                   # sort descending by heuristic value
+    
+    top_matches$amazon <- round(top_matches$amazon, 4)
+    top_matches$confidence <- round(top_matches$confidence, 4)
+    top_matches$lift <- round(top_matches$lift, 2)
+  
+    
+    # if parameter is specified, filter out any matches for which the products were only bought together once
+    if(MORE_THAN_ONE_COPURCHASE){
+      top_matches_temp <- filter(top_matches, copurchase > 1)
+      if(nrow(top_matches_temp) == 0){
+        write("\n\nNo results. Consider setting MORE_THAN_ONE_COPURCHASE as FALSE.", stderr())
+        write("Displaying products with only one co-purchase.", stderr())
+      }
+      else{
+        top_matches <- top_matches_temp
+      }
+    }
+    
+    display2 <- arrange(top_matches, desc(confidence), desc(lift))
+    
+    # display (up to) the given number of results, as specified by 'VIEW'
+    display1 <- filter(top_matches[1:VIEW,], !is.na(product))
+    display2 <- filter(display2[1:VIEW,], !is.na(product))
+    
+    cat("\nSORTED BY AMAZON HEURISTIC:\n\n")
+    print(display1)
+    cat("\n\nSORTED BY CONFIDENCE THEN LIFT:\n")
+    cat(paste("Scope:", scope, "\n\n"))
+    display2
+  
+  }
+}
+```
+
+
+```{r}
+
+### NOTE: may take 20-30 seconds to run
+### USAGE: dept_results(dept, min_copurchase, view_num, min_scope)
+
+### PARAMETERS
+  # dept: select '1' for produce, '2' for pasta, and '3' for snacks
+  # min_copurchases: the minimum number of copurchases necessary to consider each pair of products
+  # view_num: the maximum number of results to display
+  # min_scope: the minimum scope necessary to consider each pair of products
+
+
+dept_results <- function(dept = 1, min_copurchase = 1, view_num = 10, min_scope = 0){
+  
+  # checks for valud department choice
+  if(!(dept == 1 | dept == 2 | dept == 3)){
+    stop("Must choose 'dept' value of 1, 2, or 3")
+  }
+  
+  # choose the right department results
+  dat <- switch(dept, produce, pasta, snacks)
+  
+  # start the timer
+  start <- now()
+  
+  # filter based on minimum number of copurchases
+  filt <- filter(dat, copurchase >= min_copurchase)
+  if(nrow(filt) == 0){
+    max_copurchase <- max(dat$copurchase)
+    msg <- paste("No results left. Must choose a smaller 'min_copurchase' than ", min_copurchase, 
+                 ". No product pair was purchased more than ", max_copurchase, " times.", sep = "")
+    stop(msg)
+  }
+  
+  # filter based on minimum scope
+  filt <- filter(filt, scope_1 >= min_scope)
+  if(nrow(filt) == 0){
+    max_scope <- max(dat$scope_1)
+    msg <- paste("No results left. Must choose a smaller 'min_scope' than ", min_scope, 
+                 ". No product pair has a scope higher than ", max_scope, ".", sep = "")
+    stop(msg)
+  }
+  
+  cat(paste("RESULTS:", nrow(filt), "of", nrow(dat), "\n\n"))
+  
+  # remove duplicated entries for Amazon table (because of the symmetry of the heuristic) 
+  amzn <- filt
+  amzn$ids <- NA
+  for(i in 1:nrow(amzn)){
+    amzn$ids[i] <- paste(min(amzn$prod1[i], amzn$prod2[i]), max(amzn$prod1[i], amzn$prod2[i]))
+  }  
+  amzn <- amzn[!duplicated(amzn[,c("ids")]),]
+  amzn <- select(amzn, -ids)
+  
+  # rank each of the product pairs based on the four different measures (for Amazon-sorted table)
+  amzn$amzn_rank <- rank(1 - amzn$amazon, ties.method= "min")
+  amzn$conf_rank <- rank(1 - amzn$confidence_1, ties.method= "min")
+  amzn$lift_rank <- rank(1 - amzn$lift, ties.method= "min")
+  amzn$scope_rank <- rank(1 - amzn$scope_1, ties.method= "min")
+  
+  # print product pairs sorted by the Amazon heuristic
+  cat("SORTED BY AMAZON HEURISIC:\n\n")
+  amzn <- filter(amzn[1:view_num,], !is.na(amazon))
+  print(amzn)
+  cat("\n")
+  
+  # rank each of the product pairs based on the four different measures (for MBA-sorted table)
+  filt$amzn_rank <- rank(1 - filt$amazon, ties.method= "min")
+  filt$conf_rank <- rank(1 - filt$confidence_1, ties.method= "min")
+  filt$lift_rank <- rank(1 - filt$lift, ties.method= "min")
+  filt$scope_rank <- rank(1 - filt$scope_1, ties.method= "min")
+  
+  # sort and print product pairs sorted by MBA measures
+  mba <- arrange(filt, desc(confidence_1), desc(lift))[1:view_num,] %>%
+    filter(!is.na(amazon))
+  cat("\nSORTED BY CONFIDENCE THEN LIFT\n\n")
+  print(mba)
+  
+  # print runtime
+  cat(paste("\n"), now() - start)
+}
+```
+
