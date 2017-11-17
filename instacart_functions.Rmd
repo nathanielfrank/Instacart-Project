@@ -4,6 +4,46 @@ output: html_notebook
 ---
 
 
+```{r}
+### INSTRUCTIONS
+  # 1. Download all necessary files into the same directory as this notebook
+  # 2. Run all chunks
+  # 3. Use suggestions() and scan_dept() functions (in the console or a new chunk) as desired
+
+### FILES NEEDED
+ ## I. From this Github directory:
+    # A. order_lists.rds
+    # B. copurchases.rds
+    # C. product_counts.rds
+    # D. product_counts_nonzero.rds
+    # E. dry_goods_pasta_results.rds
+    # F. produce_results.rds
+    # G. snacks_results.rds
+ ## II. From Kaggle: https://www.kaggle.com/c/instacart-market-basket-analysis/data
+    # A. products.csv (2.2 MB)
+    # B. departments.csv (109 MB)
+
+### FUNCTIONS
+ ## 1. suggestions()
+    # RUNTIME: ~40 sec to 1 min
+    # USAGE: suggestions(prod_id, multiple_copurchases, view_num)
+    # PARAMETERS:
+      # prod_id: the product ID to gather other product suggestions for (integer)
+      # multiple_copurchases: whether to filter out products that were only copurchased once (TRUE or FALSE)
+      # view_num: the maximum number of results to display (integer)
+ ## 2. dept_results()
+    # RUNTIME:up to 20-30 seconds
+    # USAGE: dept_results(dept, min_copurchase, view_num, min_scope)
+    # PARAMETERS:
+      # dept: select '1' for produce, '2' for pasta, and '3' for snacks (1, 2, or 3)
+      # min_copurchases: the minimum number of copurchases necessary to consider each pair of products (integer)
+      # view_num: the maximum number of results to display (integer)
+      # min_scope: the minimum scope necessary to consider each pair of products (number)
+
+### Written by Nate Frank, Beck Olp, and Alex Stransky - November 2017
+
+```
+
 
 ```{r}
 library(tidyverse)
